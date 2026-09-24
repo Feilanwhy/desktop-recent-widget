@@ -22,15 +22,19 @@ w.show()
 app.processEvents()
 
 
-def drag(widget, start, steps, delta):
-    """从 start 按下，分 steps 步移动 delta，再释放。"""
-    QTest.mousePress(widget, Qt.MouseButton.LeftButton, pos=start)
+def drag(widget, start, steps, delta,
+         button=Qt.MouseButton.LeftButton):
+    """从 start 按下，分 steps 步移动 delta，再释放。
+    每个用例先把窗口复位到固定位置，避免 offscreen 平台 QTest
+    全局坐标偏差在窗口移动后累积导致断言失真。"""
+    widget.window().move(100, 100)
+    app.processEvents()
+    QTest.mousePress(widget, button, pos=start)
     for i in range(1, steps + 1):
         QTest.mouseMove(widget, pos=start + QPoint(delta.x() * i // steps,
                                                    delta.y() * i // steps))
         app.processEvents()
-    QTest.mouseRelease(widget, Qt.MouseButton.LeftButton,
-                       pos=start + delta)
+    QTest.mouseRelease(widget, button, pos=start + delta)
     app.processEvents()
 
 
@@ -73,6 +77,22 @@ assert (w.geometry().x(), w.geometry().y()) != (g0.x(), g0.y()), \
 w._refresh()  # 恢复真实列表
 app.processEvents()
 print("PASS 列表空白拖动")
+
+# 4.5) 右键任意区域拖动（含列表条目上）
+w.list.clear()
+for i in range(3):
+    w.list.addItem(QListWidgetItem(f"test-item-{i}"))
+app.processEvents()
+g0 = w.geometry()
+item = w.list.item(0)
+rect = w.list.visualItemRect(item)
+center = w.list.viewport().mapTo(w.list, rect.center())
+drag(w, center, 8, QPoint(35, -12), button=Qt.MouseButton.RightButton)
+assert (w.geometry().x(), w.geometry().y()) != (g0.x(), g0.y()), \
+    f"右键在列表条目上应能拖动窗口: {g0} -> {w.geometry()}"
+w._refresh()  # 恢复真实列表
+app.processEvents()
+print("PASS 右键任意区域拖动（含列表条目上）")
 
 # 5) 调整大小
 g0 = w.geometry()
