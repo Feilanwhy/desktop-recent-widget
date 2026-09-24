@@ -13,7 +13,8 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QRectF, QRect, QSize, QPointF, QFileSystemWatcher
 from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPixmap, QFont,
-                           QImage, QBrush, QPen, QRegion)
+                           QImage, QBrush, QPen, QRegion,
+                           QLinearGradient, QRadialGradient)
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QListWidget, QListWidgetItem,
                                QAbstractItemView, QSizePolicy)
@@ -39,6 +40,7 @@ MIN_W, MIN_H = 200, 220  # 最小尺寸
 MAX_ITEMS = 30           # 最多显示多少条最近记录
 REFRESH_MS = 30_000      # 兜底自动刷新间隔（毫秒）；主刷新靠文件系统监听，几乎即时
 HEADER_H = 34            # 顶部栏高度
+GRIP_H = 18              # 顶部拖动把手条高度（画着三横线标记，按住即可拖动窗口）
 
 GLASS_BORDER = QColor(255, 255, 255, 80)  # 玻璃描边（纯透明背景只保留这条轮廓）
 
@@ -195,6 +197,9 @@ class RecentList(QListWidget):
         self.setMouseTracking(True)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            event.ignore()  # 右键任意位置冒泡给父窗口，用于拖动
+            return
         if self._owner.locked:
             event.ignore()
             return
@@ -218,6 +223,7 @@ class GlassWidget(QWidget):
         self._move_off = QPoint()
         self._press_global = QPoint()
         self._press_geo = QRect()
+        self._grip_hover = False
 
         # 无边框 + 工具窗（不占任务栏）+ 始终停在桌面底层
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
@@ -254,7 +260,7 @@ class GlassWidget(QWidget):
         font = QFont("Microsoft YaHei UI", 10)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
+        root.setContentsMargins(10, GRIP_H + 8, 10, 10)
         root.setSpacing(4)
 
         # 顶部栏：标题居中，右侧是锁 + 关闭按钮
@@ -366,10 +372,16 @@ class GlassWidget(QWidget):
                 pass
 
     def _on_lock_press(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()  # 右键冒泡给父窗口拖动
+            return
         self.set_locked(not self.locked)
         self._save_config()
 
     def _on_close_press(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()  # 右键冒泡给父窗口拖动
+            return
         self.close()
 
     def set_locked(self, locked):
@@ -453,12 +465,26 @@ class GlassWidget(QWidget):
             self.move(self._clamp_to_screen(geo).topLeft())
             event.accept()
             return
-        # 悬停时切换调整大小的鼠标样式
-        self.setCursor(self._cursor_for(self.edge_at(pos)))
+        # 悬停时切换鼠标样式：把手条显示移动光标，边缘显示缩放光标
+        hover = pos.y() <= GRIP_H
+        if hover:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        else:
+            self.setCursor(self._cursor_for(self.edge_at(pos)))
+        if hover != self._grip_hover:
+            self._grip_hover = hover
+            self.update()
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event):
         pos = event.position().toPoint()
+        if event.button() == Qt.MouseButton.RightButton:
+            # 右键在任意区域按住 = 拖动窗口
+            self._moving = True
+            self._move_off = event.globalPosition().toPoint() \
+                - self.frameGeometry().topLeft()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             edges = self.edge_at(pos)
             if edges:
@@ -481,7 +507,7 @@ class GlassWidget(QWidget):
         if self.lock_btn.geometry().contains(pos) \
                 or self.close_btn.geometry().contains(pos):
             return False
-        if pos.y() <= HEADER_H:
+        if pos.y() <= GRIP_H + HEADER_H:
             return True  # 顶部整行（含标题文字）都能拖
         if self.list.geometry().contains(pos):
             lp = self.list.viewport().mapFrom(self, pos)
@@ -508,11 +534,64 @@ class GlassWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
-        path.addRoundedRect(r, 14, 14)
-        # 纯透明：不填充任何底色，只描边勾勒出长条轮廓
-        p.setPen(QPen(GLASS_BORDER, 1.0))
+        path.addRoundedRect(r, 16, 16)
+
+        # —— iOS 液态玻璃底：半透明白渐变（上亮下微暗），桌面透过玻璃微微可见 ——
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0.0, QColor(255, 255, 255, 72))
+        grad.setColorAt(0.45, QColor(255, 255, 255, 34))
+        grad.setColorAt(1.0, QColor(255, 255, 255, 20))
+        p.fillPath(path, QBrush(grad))
+
+        # —— 高光层：顶部反光细线 + 左上柔光斑 + 底部厚度阴影 ——
+        p.save()
+        p.setClipPath(path)
+        p.setPen(QPen(QColor(255, 255, 255, 120), 2.0))
+        p.drawLine(0, 3, int(self.width()), 3)
+        cx, cy = self.width() * 0.20, self.height() * 0.08
+        radius = self.width() * 0.45
+        spot = QRadialGradient(cx, cy, radius)
+        spot.setColorAt(0.0, QColor(255, 255, 255, 46))
+        spot.setColorAt(0.55, QColor(255, 255, 255, 12))
+        spot.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.fillRect(QRectF(cx - radius, cy - radius, radius * 2, radius * 2),
+                   QBrush(spot))
+        p.setPen(QPen(QColor(255, 255, 255, 40), 1.0))
+        p.drawLine(0, int(self.height()) - 3, int(self.width()),
+                   int(self.height()) - 3)
+        p.restore()
+
+        # 描边：液态玻璃的边缘光
+        p.setPen(QPen(QColor(255, 255, 255, 120), 1.2))
         p.drawPath(path)
+        # 顶部把手条：三横线图形标记，提示按住这里可拖动窗口
+        self._paint_grip(p)
         p.end()
+
+    def _paint_grip(self, p):
+        """绘制顶部拖动把手：三条短横线，鼠标悬停时高亮。"""
+        w = self.width()
+        bar_w = 22.0
+        x0 = (w - bar_w) / 2.0
+        y0 = (GRIP_H - 10.0) / 2.0
+        # 底托（圆角浅条，悬停时更明显）
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255, 36) if self._grip_hover
+                   else QColor(255, 255, 255, 14))
+        p.drawRoundedRect(QRectF(x0 - 8, y0 - 3, bar_w + 16, 16), 8, 8)
+        # 三横线
+        p.setPen(QPen(QColor(255, 255, 255, 150) if self._grip_hover
+                      else QColor(255, 255, 255, 85), 2.0,
+                      Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for i in range(3):
+            y = y0 + i * 4.0
+            p.drawLine(QPointF(x0, y), QPointF(x0 + bar_w, y))
+
+    def leaveEvent(self, event):
+        if self._grip_hover:
+            self._grip_hover = False
+            self.update()
+        super().leaveEvent(event)
 
     # ---------------- 配置持久化 ----------------
     def _load_config(self):
