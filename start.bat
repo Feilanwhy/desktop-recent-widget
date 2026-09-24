@@ -1,9 +1,13 @@
 @echo off
-rem æ¡Œé¢çŽ»ç’ƒå°éƒ¨ä»¶å¯åŠ¨è„šæœ¬
+rem ×ÀÃæ²£Á§Ð¡²¿¼þÆô¶¯½Å±¾
 cd /d "%~dp0"
-
-set "PY=pythonw"
-where pythonw >nul 2>nul || set "PY=pyw"
-where %PY% >nul 2>nul || set "PY=python"
-
-start "" %PY% "%~dp0main.py"
+set "PYW="
+rem 1) ÓÅÏÈÕÒÓÃ»§×Ô¼º°²×°µÄ Python£¨³£¼ûÎ»ÖÃ£©
+for %%D in ("D:\Python313" "D:\Python312" "C:\Python313" "C:\Python312" "%LOCALAPPDATA%\Programs\Python\Python313" "%LOCALAPPDATA%\Programs\Python\Python312") do (
+  if not defined PYW if exist "%%~D\pythonw.exe" set "PYW=%%~D\pythonw.exe"
+)
+rem 2) ÕÒ²»µ½¾Í°´ PATH Ì½²â
+if not defined PYW for /f "delims=" %%i in ('where pythonw 2^>nul') do if not defined PYW set "PYW=%%i"
+rem 3) ¶µµ×
+if not defined PYW set "PYW=pythonw"
+start "" "%PYW%" "%~dp0main.py"
