@@ -1,0 +1,14 @@
+# 运行配置（含个人窗口位置，不必要上传）
+widget_config.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# PyInstaller 构建产物（exe 打包后本地使用即可，不上传）
+build/
+dist/
+*.spec
+
+# 临时文件
+*.log
