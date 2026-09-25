@@ -188,6 +188,60 @@ class CloseButton(QLabel):
         p.end()
 
 # ----------------------------------------------------------------------------
+# 钉子按钮：点击固定位置（固定后不能拖动/缩放），再点解除
+# ----------------------------------------------------------------------------
+class PinButton(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("点击固定位置（固定后不能拖动/缩放）；再点一次解除")
+        self.pinned = False
+        self._hover = False
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def set_pinned(self, pinned):
+        self.pinned = pinned
+        self.setToolTip("已固定位置，点击解除" if pinned
+                        else "点击固定位置（固定后不能拖动/缩放）")
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.pinned:
+            color = QColor(255, 179, 0)
+        elif self._hover:
+            color = QColor(255, 255, 255, 255)
+        else:
+            color = QColor(255, 255, 255, 200)
+        head = QRectF(5.5, 2.5, 13, 13)
+        if self.pinned:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(color))
+            p.drawEllipse(head)
+        else:
+            p.setPen(QPen(color, 1.8))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(head)
+        p.setPen(QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        if self.pinned:
+            p.drawLine(QPointF(12, 15.5), QPointF(12, 21.5))
+            p.drawLine(QPointF(7, 21.5), QPointF(17, 21.5))
+        else:
+            p.drawLine(QPointF(12, 15.5), QPointF(17.5, 21))
+        p.end()
+
+# ----------------------------------------------------------------------------
 # 列表控件：锁定状态下点击不产生任何反应
 # ----------------------------------------------------------------------------
 class RecentList(QListWidget):
@@ -224,6 +278,7 @@ class GlassWidget(QWidget):
         self._press_global = QPoint()
         self._press_geo = QRect()
         self._grip_hover = False
+        self.pinned = False
 
         # 无边框 + 工具窗（不占任务栏）+ 始终停在桌面底层
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
@@ -267,7 +322,7 @@ class GlassWidget(QWidget):
         header = QHBoxLayout()
         header.setSpacing(4)
         # 左侧占位与右侧按钮区等宽，保证标题文字真正居中
-        header.addSpacing(26 + 4 + 26)
+        header.addSpacing(26 + 4 + 26 + 4 + 26)
         header.addStretch(1)
         self.title_label = QLabel("最近打开")
         self.title_label.setFont(QFont("Microsoft YaHei UI", 9))
@@ -281,6 +336,9 @@ class GlassWidget(QWidget):
         self.lock_btn = LockButton()
         self.lock_btn.mousePressEvent = self._on_lock_press
         header.addWidget(self.lock_btn)
+        self.pin_btn = PinButton()
+        self.pin_btn.mousePressEvent = self._on_pin_press
+        header.addWidget(self.pin_btn)
         self.close_btn = CloseButton()
         self.close_btn.mousePressEvent = self._on_close_press
         header.addWidget(self.close_btn)
@@ -378,6 +436,17 @@ class GlassWidget(QWidget):
         self.set_locked(not self.locked)
         self._save_config()
 
+    def _on_pin_press(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        self.set_pinned(not self.pinned)
+        self._save_config()
+
+    def set_pinned(self, pinned):
+        self.pinned = pinned
+        self.pin_btn.set_pinned(pinned)
+
     def _on_close_press(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             event.ignore()  # 右键冒泡给父窗口拖动
@@ -440,6 +509,13 @@ class GlassWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         pos = event.position().toPoint()
+        if self.pinned:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if self._grip_hover:
+                self._grip_hover = False
+                self.update()
+            super().mouseMoveEvent(event)
+            return
         # 正在调整大小
         if self._edges:
             gp = event.globalPosition().toPoint()
@@ -478,6 +554,10 @@ class GlassWidget(QWidget):
 
     def mousePressEvent(self, event):
         pos = event.position().toPoint()
+        if self.pinned:
+            # 固定位置：禁止拖动与缩放，列表交互照常
+            super().mousePressEvent(event)
+            return
         if event.button() == Qt.MouseButton.RightButton:
             # 右键在任意区域按住 = 拖动窗口
             self._moving = True
@@ -602,6 +682,8 @@ class GlassWidget(QWidget):
                 geo = cfg.get("geometry")
                 if cfg.get("locked"):
                     self.set_locked(True)
+                if cfg.get("pinned"):
+                    self.set_pinned(True)
         except Exception:
             pass
         g = None
@@ -628,6 +710,7 @@ class GlassWidget(QWidget):
             cfg = {
                 "geometry": [g.x(), g.y(), g.width(), g.height()],
                 "locked": self.locked,
+                "pinned": self.pinned,
             }
             CONFIG_PATH.write_text(
                 json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
