@@ -9,6 +9,10 @@ from PySide6.QtCore import Qt, QPoint
 
 import main
 
+# 清理真实配置，避免上次运行残留状态干扰测试
+if main.CONFIG_PATH.exists():
+    main.CONFIG_PATH.unlink()
+
 app = QApplication([])
 app.setQuitOnLastWindowClosed(False)
 
@@ -93,6 +97,34 @@ assert (w.geometry().x(), w.geometry().y()) != (g0.x(), g0.y()), \
 w._refresh()  # 恢复真实列表
 app.processEvents()
 print("PASS 右键任意区域拖动（含列表条目上）")
+
+# 4.8) 钉子固定：固定后不能拖动/缩放，解除后恢复
+def drag_raw(widget, start, steps, delta, button):
+    QTest.mousePress(widget, button, pos=start)
+    for i in range(1, steps + 1):
+        QTest.mouseMove(widget, pos=start + QPoint(delta.x() * i // steps,
+                                                   delta.y() * i // steps))
+        app.processEvents()
+    QTest.mouseRelease(widget, button, pos=start + delta)
+    app.processEvents()
+
+w.move(200, 200)
+app.processEvents()
+w.set_pinned(True)
+app.processEvents()
+g0 = w.geometry()
+drag_raw(w, QPoint(w.width() // 2, w.height() // 2), 6, QPoint(50, 30),
+         Qt.MouseButton.RightButton)
+assert w.geometry() == g0, f"固定后不应能拖动: {g0} -> {w.geometry()}"
+drag_raw(w, QPoint(w.width() - 2, w.height() - 2), 6, QPoint(30, 30),
+         Qt.MouseButton.LeftButton)
+assert w.geometry() == g0, f"固定后不应能缩放: {g0} -> {w.geometry()}"
+w.set_pinned(False)
+app.processEvents()
+drag(w, QPoint(w.width() // 2, w.height() // 2), 6, QPoint(40, 20),
+     button=Qt.MouseButton.RightButton)
+assert (w.geometry().x(), w.geometry().y()) != (100, 100), "解除后应能拖动"
+print("PASS 钉子固定/解除")
 
 # 5) 调整大小
 g0 = w.geometry()
